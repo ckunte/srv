@@ -1,6 +1,6 @@
 # srv
 
-A tiny static file server. Serves the current folder over HTTP — single binary, standard library only, no dependencies.
+A tiny static web server. Serves the current folder over HTTP — single binary, standard library only, no dependencies.
 
 ```
 srv — serve the current folder over HTTP
