@@ -2,7 +2,7 @@
 name = "srv"
 version = "0.1.0"
 edition = "2021"
-description = "Tiny static file server — serve the current folder over HTTP, std only"
+description = "Tiny static web server — serve the current folder over HTTP, std only"
 
 [[bin]]
 name = "srv"
