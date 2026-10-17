@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::{
@@ -14,11 +14,15 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const HELP: &str = "srv — serve the current folder over HTTP
 
-usage: srv [port] [--public]
+usage: srv [port] [--host name] [--public]
 
   port       port to listen on (default 8000)
+  --host     name to show in the URL, e.g. home.lo (default localhost)
   --public   listen on all interfaces (default: localhost only)
   help       show this help
+
+author:
+  Chetan Kunte, github.com/ckunte/srv
 ";
 
 const MAX_HEADER_BYTES: u64 = 16 * 1024;
@@ -178,12 +182,21 @@ impl Drop for ConnGuard {
     fn drop(&mut self) { self.0.fetch_sub(1, Ordering::SeqCst); }
 }
 
-fn serve(port: u16, public: bool) -> Result<()> {
+fn serve(port: u16, name: &str, public: bool) -> Result<()> {
     let root = env::current_dir()?.canonicalize()?;
     let host = if public { "0.0.0.0" } else { "127.0.0.1" };
     let listener = TcpListener::bind((host, port))
         .map_err(|e| format!("Cannot bind to {}:{}: {}", host, port, e))?;
-    println!("Serving {} on http://localhost:{} — Ctrl-C to stop", root.display(), port);
+    println!("Serving {} on http://{}:{} — Ctrl-C to stop", root.display(), name, port);
+    // A custom name only works if it resolves to this machine (e.g. via /etc/hosts).
+    if name != "localhost" {
+        let ok = (name, port).to_socket_addrs()
+            .map(|mut a| a.any(|s| s.ip().is_loopback() || public))
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("warning: '{}' does not resolve to this machine — add to /etc/hosts:  127.0.0.1  {}", name, name);
+        }
+    }
     if public {
         eprintln!("warning: --public exposes this folder to every host that can reach this machine");
     }
@@ -215,9 +228,16 @@ fn main() {
     }
     let mut port = 8000u16;
     let mut public = false;
-    for a in &args {
+    let mut name = String::from("localhost");
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
         if a == "--public" {
             public = true;
+        } else if a == "--host" {
+            match it.next() {
+                Some(h) if !h.is_empty() && h.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') => name = h.clone(),
+                _ => { eprintln!("srv: --host needs a hostname (letters, digits, '.', '-')"); exit(1); }
+            }
         } else if let Ok(p) = a.parse::<u16>() {
             port = p;
         } else {
@@ -225,7 +245,7 @@ fn main() {
             exit(1);
         }
     }
-    if let Err(e) = serve(port, public) {
+    if let Err(e) = serve(port, &name, public) {
         eprintln!("error: {}", e);
         exit(1);
     }
