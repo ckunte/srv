@@ -106,13 +106,13 @@ fn resolve_request(root: &Path, raw_path: &str) -> std::result::Result<PathBuf, 
         PathBuf::from(name)
     };
     if file_path.is_dir() {
-        // `name.html` wins over a `name/` folder, so `/blog` serves
-        // `blog.html` even when a `blog/` folder exists.  Otherwise a folder
-        // serves its `index.html`.
-        if file_path != root && sibling.is_file() {
+        // A folder wins: `/blog` serves `blog/index.html`.  Only if the folder
+        // has no index.html does `blog.html` get a turn.
+        let index = file_path.join("index.html");
+        if !index.is_file() && file_path != root && sibling.is_file() {
             file_path = sibling;
         } else {
-            file_path.push("index.html");
+            file_path = index;
         }
     } else if !file_path.exists() && sibling.exists() {
         file_path = sibling;
@@ -298,13 +298,21 @@ mod tests {
     }
 
     #[test]
-    fn sibling_html_wins_over_folder() {
-        let root = site("sibling", &["blog.html", "blog/2021.html", "docs/index.html", "index.html"]);
-        // blog.html is served for /blog even though a blog/ folder exists
-        assert_eq!(served(&root, "/blog").as_deref(), Some("blog.html"));
-        assert_eq!(served(&root, "/blog/").as_deref(), Some("blog.html"));
-        assert_eq!(served(&root, "/blog/2021").as_deref(), Some("blog/2021.html"));
-        // a folder without a sibling still serves its index.html
+    fn folder_index_first_then_html_file() {
+        let root = site(
+            "order",
+            &[
+                "blog/index.html", "blog.html",      // folder and file: folder wins
+                "posts/2021.html", "posts.html",     // folder without index: file
+                "about.html",                         // no folder: file
+                "docs/index.html", "index.html",
+            ],
+        );
+        assert_eq!(served(&root, "/blog").as_deref(), Some("blog/index.html"));
+        assert_eq!(served(&root, "/blog/").as_deref(), Some("blog/index.html"));
+        assert_eq!(served(&root, "/posts").as_deref(), Some("posts.html"));
+        assert_eq!(served(&root, "/posts/2021").as_deref(), Some("posts/2021.html"));
+        assert_eq!(served(&root, "/about").as_deref(), Some("about.html"));
         assert_eq!(served(&root, "/docs").as_deref(), Some("docs/index.html"));
         assert_eq!(served(&root, "/").as_deref(), Some("index.html"));
     }
