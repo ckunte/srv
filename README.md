@@ -28,14 +28,20 @@ cargo install --path . --locked
 
 ## prebuilt binary (Raspberry Pi 5, Raspberry Pi OS Lite / Debian Trixie, 64-bit)
 
-Pushing a `v*` tag builds a static `aarch64-unknown-linux-musl` binary and attaches it to a GitHub release. Download it from the latest release, then:
+Pushing a `v*` tag builds a static `aarch64-unknown-linux-musl` binary and attaches it to a GitHub release. A bash install script [inst.sh][mi] downloads the latest release, verifies it against `SHA256SUMS.txt`, and installs `srv` to `/usr/local/bin` (uses `sudo` if needed). It stops without installing if the checksum doesn't match:
 
 ```bash
-tar -xzf srv-v*-linux-arm64-rpi5.tar.gz
-sudo install -m 755 srv /usr/local/bin/srv
+curl --proto '=https' --tlsv1.2 -sSfL https://raw.githubusercontent.com/ckunte/srv/refs/heads/master/inst.sh | bash
 ```
 
-Verify the download against `SHA256SUMS.txt` from the same release with `sha256sum -c --ignore-missing SHA256SUMS.txt`.
+To install a specific version, or to a different folder:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSfL https://raw.githubusercontent.com/ckunte/srv/refs/heads/master/inst.sh | bash -s -- v0.1.0
+curl --proto '=https' --tlsv1.2 -sSfL https://raw.githubusercontent.com/ckunte/srv/refs/heads/master/inst.sh | INSTALL_DIR=$HOME/.local/bin bash
+```
+
+[mi]: https://raw.githubusercontent.com/ckunte/srv/refs/heads/master/inst.sh
 
 ## setup: srv on Raspberry Pi OS Lite
 
@@ -44,13 +50,7 @@ Serve a static site from a Raspberry Pi 5 on your LAN, started at boot by system
 **1. Install the binary**
 
 ```bash
-VERSION=v0.1.0   # the release tag to install
-cd /tmp
-curl -LO https://github.com/ckunte/srv/releases/download/$VERSION/srv-$VERSION-linux-arm64-rpi5.tar.gz
-curl -LO https://github.com/ckunte/srv/releases/download/$VERSION/SHA256SUMS.txt
-sha256sum -c --ignore-missing SHA256SUMS.txt
-tar -xzf srv-$VERSION-linux-arm64-rpi5.tar.gz
-sudo install -m 755 srv /usr/local/bin/srv
+curl --proto '=https' --tlsv1.2 -sSfL https://raw.githubusercontent.com/ckunte/srv/refs/heads/master/inst.sh | bash
 srv help
 ```
 
@@ -119,7 +119,7 @@ No restart is needed; files are read from disk on each request.
 
 **7. Upgrade srv**
 
-Repeat step 1 with the new `VERSION`, then `sudo systemctl restart srv`.
+Repeat step 1 (it installs the latest release), then `sudo systemctl restart srv`.
 
 Logs: `journalctl -u srv -n 50 --no-pager`.
 
