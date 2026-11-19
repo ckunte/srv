@@ -98,15 +98,24 @@ fn resolve_request(root: &Path, raw_path: &str) -> std::result::Result<PathBuf, 
         }
     }
 
-    if file_path.is_dir() {
-        file_path.push("index.html");
-    } else if !file_path.exists() {
-        // Append (not replace) the extension, so `/post.2021` maps to
-        // `post.2021.html` rather than `post.html`.
+    // `/name` maps to `name.html`.  The extension is appended (not replaced),
+    // so `/post.2021` is `post.2021.html`, not `post.html`.
+    let sibling = {
         let mut name = file_path.clone().into_os_string();
         name.push(".html");
-        let with_html = PathBuf::from(name);
-        if with_html.exists() { file_path = with_html; }
+        PathBuf::from(name)
+    };
+    if file_path.is_dir() {
+        // `name.html` wins over a `name/` folder, so `/blog` serves
+        // `blog.html` even when a `blog/` folder exists.  Otherwise a folder
+        // serves its `index.html`.
+        if file_path != root && sibling.is_file() {
+            file_path = sibling;
+        } else {
+            file_path.push("index.html");
+        }
+    } else if !file_path.exists() && sibling.exists() {
+        file_path = sibling;
     }
 
     let canonical = file_path.canonicalize().map_err(|_| 404u16)?;
@@ -286,6 +295,18 @@ mod tests {
         let root = site("dotted", &["post.html", "post.2021.html"]);
         assert_eq!(served(&root, "/post.2021").as_deref(), Some("post.2021.html"));
         assert_eq!(served(&root, "/post").as_deref(), Some("post.html"));
+    }
+
+    #[test]
+    fn sibling_html_wins_over_folder() {
+        let root = site("sibling", &["blog.html", "blog/2021.html", "docs/index.html", "index.html"]);
+        // blog.html is served for /blog even though a blog/ folder exists
+        assert_eq!(served(&root, "/blog").as_deref(), Some("blog.html"));
+        assert_eq!(served(&root, "/blog/").as_deref(), Some("blog.html"));
+        assert_eq!(served(&root, "/blog/2021").as_deref(), Some("blog/2021.html"));
+        // a folder without a sibling still serves its index.html
+        assert_eq!(served(&root, "/docs").as_deref(), Some("docs/index.html"));
+        assert_eq!(served(&root, "/").as_deref(), Some("index.html"));
     }
 
     #[test]
