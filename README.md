@@ -25,3 +25,12 @@ usage: srv [port] [--public]
 ```bash
 cargo install --path . --locked
 ```
+
+## prebuilt binary (Linux arm64, e.g. Raspberry Pi 5)
+
+CI builds a static `aarch64-unknown-linux-musl` binary. Grab `srv-linux-arm64.tar.gz` from the latest release (pushed `v*` tags) or from the workflow run's artifacts, then:
+
+```bash
+tar -xzf srv-linux-arm64.tar.gz
+sudo install -m 755 srv /usr/local/bin/srv
+```

@@ -1,0 +1,69 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-arm64:
+    # Native arm64 runner, so no cross toolchain is needed.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      # musl gives a fully static binary that runs on any aarch64 Linux
+      # (Raspberry Pi OS Bookworm/Trixie, etc.) regardless of glibc version.
+      - name: Install musl target
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add aarch64-unknown-linux-musl
+
+      - name: Build
+        run: cargo build --release --locked --target aarch64-unknown-linux-musl
+
+      - name: Check binary
+        run: |
+          file target/aarch64-unknown-linux-musl/release/srv
+          target/aarch64-unknown-linux-musl/release/srv help
+
+      - name: Package
+        run: |
+          mkdir dist
+          cp target/aarch64-unknown-linux-musl/release/srv dist/srv
+          tar -C dist -czf srv-linux-arm64.tar.gz srv
+          sha256sum srv-linux-arm64.tar.gz > srv-linux-arm64.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: srv-linux-arm64
+          path: |
+            srv-linux-arm64.tar.gz
+            srv-linux-arm64.tar.gz.sha256
+
+  release:
+    # Attach the binary to a GitHub release when a v* tag is pushed.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: linux-arm64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: srv-linux-arm64
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            srv-linux-arm64.tar.gz srv-linux-arm64.tar.gz.sha256
