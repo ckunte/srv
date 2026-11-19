@@ -26,11 +26,13 @@ usage: srv [port] [--public]
 cargo install --path . --locked
 ```
 
-## prebuilt binary (Linux arm64, e.g. Raspberry Pi 5)
+## prebuilt binary (Raspberry Pi 5, Raspberry Pi OS Lite / Debian Trixie, 64-bit)
 
-CI builds a static `aarch64-unknown-linux-musl` binary. Grab `srv-linux-arm64.tar.gz` from the latest release (pushed `v*` tags) or from the workflow run's artifacts, then:
+Pushing a `v*` tag builds a static `aarch64-unknown-linux-musl` binary and attaches it to a GitHub release. Download it from the latest release, then:
 
 ```bash
-tar -xzf srv-linux-arm64.tar.gz
+tar -xzf srv-v*-linux-arm64-rpi5.tar.gz
 sudo install -m 755 srv /usr/local/bin/srv
 ```
+
+Verify the download against `SHA256SUMS.txt` from the same release with `sha256sum -c --ignore-missing SHA256SUMS.txt`.

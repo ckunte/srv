@@ -1,0 +1,105 @@
+name: release
+
+# Build `srv` for Raspberry Pi 5 (Raspberry Pi OS Lite, Debian 13 "Trixie",
+# 64-bit) and attach the archive to a GitHub release.
+#
+# Trigger: push a tag like v0.1.0   ->  git tag v0.1.0 && git push origin v0.1.0
+# or run it by hand from the Actions tab (builds the artifact only, no release).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # On a tag push, make sure the tag matches the version in Cargo.toml.
+  check-version:
+    name: check tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: compare versions
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          cargo_version=$(sed -n 's/^version *= *"\(.*\)"$/\1/p' Cargo.toml | head -1)
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$cargo_version" != "$tag_version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${cargo_version}"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches Cargo.toml version ${cargo_version}"
+
+  build:
+    name: build (linux-arm64-rpi5)
+    needs: check-version
+    # Native arm64 runner, so no cross toolchain is needed.
+    runs-on: ubuntu-24.04-arm
+    env:
+      # musl = fully static, so it runs on Raspberry Pi OS Trixie (or any
+      # other 64-bit Pi OS) regardless of the glibc version on the Pi.
+      TARGET: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: aarch64-unknown-linux-musl
+
+      - name: build
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: check binary
+        run: |
+          file "target/$TARGET/release/srv"
+          "target/$TARGET/release/srv" help
+
+      - name: package (tar.gz)
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          name="srv-${REF_NAME}-linux-arm64-rpi5"
+          mkdir -p dist
+          cp "target/$TARGET/release/srv" README.md dist/
+          tar -C dist -czf "dist/$name.tar.gz" srv README.md
+          rm -f dist/srv dist/README.md
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: srv-linux-arm64-rpi5
+          path: dist/*
+
+  release:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt
+
+      # Creates the release, or adds files to it if it already exists.
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          files: dist/*
+          generate_release_notes: true
