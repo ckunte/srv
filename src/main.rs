@@ -28,8 +28,9 @@ const MAX_HEADER_BYTES: u64 = 16 * 1024;
 const MAX_CONNECTIONS: usize = 64;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Percent-decode into raw bytes, then validate as UTF-8.  Returns None for
-/// malformed escapes or invalid UTF-8.
+/// Percent-decode a URL path into raw bytes, then validate as UTF-8.  Returns
+/// None for malformed escapes or invalid UTF-8.  `+` is a literal in a path
+/// (only query strings treat it as a space), so it is left as is.
 fn url_decode(s: &str) -> Option<String> {
     let mut out: Vec<u8> = Vec::with_capacity(s.len());
     let mut bytes = s.bytes();
@@ -40,7 +41,6 @@ fn url_decode(s: &str) -> Option<String> {
                 let h2 = bytes.next().and_then(|c| (c as char).to_digit(16))?;
                 out.push((h1 * 16 + h2) as u8);
             }
-            b'+' => out.push(b' '),
             _    => out.push(b),
         }
     }
@@ -51,16 +51,29 @@ fn mime_type(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("html") | Some("htm") => "text/html; charset=utf-8",
         Some("css")                => "text/css",
-        Some("js")                 => "application/javascript",
+        Some("js") | Some("mjs")   => "application/javascript",
         Some("json")               => "application/json",
         Some("png")                => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("gif")                => "image/gif",
         Some("svg")                => "image/svg+xml",
+        Some("webp")               => "image/webp",
+        Some("avif")               => "image/avif",
+        Some("ico")                => "image/vnd.microsoft.icon",
         Some("pdf")                => "application/pdf",
         Some("txt") | Some("md")   => "text/plain; charset=utf-8",
+        Some("csv")                => "text/csv; charset=utf-8",
+        Some("xml")                => "application/xml",
+        Some("webmanifest")        => "application/manifest+json",
+        Some("wasm")               => "application/wasm",
+        Some("mp4")                => "video/mp4",
+        Some("webm")               => "video/webm",
+        Some("mp3")                => "audio/mpeg",
+        Some("ogg")                => "audio/ogg",
         Some("woff")               => "font/woff",
         Some("woff2")              => "font/woff2",
+        Some("ttf")                => "font/ttf",
+        Some("otf")                => "font/otf",
         _                          => "application/octet-stream",
     }
 }
@@ -85,10 +98,24 @@ fn resolve_request(root: &Path, raw_path: &str) -> std::result::Result<PathBuf, 
         }
     }
 
-    if file_path.is_dir() { file_path.push("index.html"); }
-    if !file_path.exists() {
-        let with_html = file_path.with_extension("html");
-        if with_html.exists() { file_path = with_html; }
+    // `/name` maps to `name.html`.  The extension is appended (not replaced),
+    // so `/post.2021` is `post.2021.html`, not `post.html`.
+    let sibling = {
+        let mut name = file_path.clone().into_os_string();
+        name.push(".html");
+        PathBuf::from(name)
+    };
+    if file_path.is_dir() {
+        // A folder wins: `/blog` serves `blog/index.html`.  Only if the folder
+        // has no index.html does `blog.html` get a turn.
+        let index = file_path.join("index.html");
+        if !index.is_file() && file_path != root && sibling.is_file() {
+            file_path = sibling;
+        } else {
+            file_path = index;
+        }
+    } else if !file_path.exists() && sibling.exists() {
+        file_path = sibling;
     }
 
     let canonical = file_path.canonicalize().map_err(|_| 404u16)?;
@@ -231,5 +258,87 @@ fn main() {
     if let Err(e) = serve(port, public) {
         eprintln!("error: {}", e);
         exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A canonical temp folder containing the given files (paths relative to it).
+    fn site(name: &str, files: &[&str]) -> PathBuf {
+        let root = env::temp_dir().join(format!("srv-test-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for f in files {
+            let p = root.join(f);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, f).unwrap();
+        }
+        root.canonicalize().unwrap()
+    }
+
+    fn served(root: &Path, req: &str) -> Option<String> {
+        resolve_request(root, req).ok().map(|p| {
+            p.strip_prefix(root).unwrap().to_string_lossy().into_owned()
+        })
+    }
+
+    #[test]
+    fn clean_url_falls_back_to_html() {
+        let root = site("clean", &["2021/jf.html", "index.html"]);
+        assert_eq!(served(&root, "/2021/jf").as_deref(), Some("2021/jf.html"));
+        assert_eq!(served(&root, "/").as_deref(), Some("index.html"));
+    }
+
+    #[test]
+    fn dotted_names_append_html() {
+        let root = site("dotted", &["post.html", "post.2021.html"]);
+        assert_eq!(served(&root, "/post.2021").as_deref(), Some("post.2021.html"));
+        assert_eq!(served(&root, "/post").as_deref(), Some("post.html"));
+    }
+
+    #[test]
+    fn folder_index_first_then_html_file() {
+        let root = site(
+            "order",
+            &[
+                "blog/index.html", "blog.html",      // folder and file: folder wins
+                "posts/2021.html", "posts.html",     // folder without index: file
+                "about.html",                         // no folder: file
+                "docs/index.html", "index.html",
+            ],
+        );
+        assert_eq!(served(&root, "/blog").as_deref(), Some("blog/index.html"));
+        assert_eq!(served(&root, "/blog/").as_deref(), Some("blog/index.html"));
+        assert_eq!(served(&root, "/posts").as_deref(), Some("posts.html"));
+        assert_eq!(served(&root, "/posts/2021").as_deref(), Some("posts/2021.html"));
+        assert_eq!(served(&root, "/about").as_deref(), Some("about.html"));
+        assert_eq!(served(&root, "/docs").as_deref(), Some("docs/index.html"));
+        assert_eq!(served(&root, "/").as_deref(), Some("index.html"));
+    }
+
+    #[test]
+    fn plus_is_literal_in_paths() {
+        let root = site("plus", &["a+b.txt"]);
+        assert_eq!(served(&root, "/a+b.txt").as_deref(), Some("a+b.txt"));
+        assert_eq!(served(&root, "/a%2Bb.txt").as_deref(), Some("a+b.txt"));
+        assert_eq!(url_decode("a%20b").as_deref(), Some("a b"));
+    }
+
+    #[test]
+    fn rejects_traversal_and_dotfiles() {
+        let root = site("reject", &[".env", "ok.html"]);
+        assert_eq!(resolve_request(&root, "/../etc/passwd"), Err(400));
+        assert_eq!(resolve_request(&root, "/%2e%2e/etc/passwd"), Err(400));
+        assert_eq!(resolve_request(&root, "/.env"), Err(404));
+        assert_eq!(resolve_request(&root, "/%2eenv"), Err(404));
+    }
+
+    #[test]
+    fn mime_types() {
+        assert_eq!(mime_type(Path::new("a.webp")), "image/webp");
+        assert_eq!(mime_type(Path::new("a.ico")), "image/vnd.microsoft.icon");
+        assert_eq!(mime_type(Path::new("a.mp4")), "video/mp4");
+        assert_eq!(mime_type(Path::new("a.unknown")), "application/octet-stream");
     }
 }
